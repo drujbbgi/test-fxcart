@@ -60,6 +60,8 @@ var FC = FC || {};
     (attributeCustomerUnfavorite = '[foxy-logic-action="unfavorite"]'),
     (attributeCustomerLogout = '[foxy-logic-action="logout"]');
 
+  console.log('[Foxy Portal] Initializing with settings:', SETTINGS);
+
   // Support multiple protected paths (or a single string for backwards compatibility)
     let protectedPaths = Array.isArray(protectedPath)
       ? protectedPath.filter(Boolean)
@@ -67,31 +69,42 @@ var FC = FC || {};
       ? [protectedPath]
       : [];
 
+  console.log('[Foxy Portal] Protected paths:', protectedPaths);
+
   customElements.whenDefined("foxy-customer-portal").then(() => {
+    console.log('[Foxy Portal] Customer portal element defined');
     if (portal) {
+      console.log('[Foxy Portal] Portal element found, attaching event listeners');
       portal.addEventListener("signin", function (event) {
+        console.log('[Foxy Portal] Sign-in event triggered', { forcePasswordReset: event.detail.forcePasswordReset });
         showSpinnerAnimation(event.detail.forcePasswordReset);
         fetchCustomerData(!event.detail.forcePasswordReset);
       });
 
       portal.addEventListener("passwordreset", function (event) {
+        console.log('[Foxy Portal] Password reset event triggered');
         handleOnLogInRedirect();
       });
 
       portal.addEventListener("signout", function () {
+        console.log('[Foxy Portal] Sign-out event triggered');
         clearLocalStorage();
         updatePage();
       });
 
       checkAuthentication();
       if (authenticated) {
+        console.log('[Foxy Portal] User authenticated on portal load, fetching customer data');
         // Fetch customer any time the portal is loaded in case they've made a purchase since logging in
         fetchCustomerData(false);
       }
+    } else {
+      console.log('[Foxy Portal] Portal element not found');
     }
   });
 
   function clearLocalStorage() {
+    console.log('[Foxy Portal] Clearing local storage and resetting state');
     localStorage.removeItem("fx.customer.attributes");
     localStorage.removeItem("fx.customer.details");
     localStorage.removeItem("fx.customer.firstName"); // legacy - remove later
@@ -104,6 +117,7 @@ var FC = FC || {};
     transactionCodes = [];
     customerDetails = {};
     customerAttributes = {};
+    console.log('[Foxy Portal] Local storage cleared');
   }
 
   function resolvedSettings() {
@@ -118,21 +132,27 @@ var FC = FC || {};
   document.addEventListener("click", async function (event) {
     const target = event.target;
     if (event.target.matches(attributeCustomerLogout + "," + attributeCustomerLogout + " *")) {
+      console.log('[Foxy Portal] Logout button clicked');
       localStorage.removeItem(portalSessionKey);
       clearLocalStorage();
       window.location.reload();
       return;
     }
-    if (target.matches(attributeCustomerUnfavorite) || target.matches(attributeCustomerFavorite))
+    if (target.matches(attributeCustomerUnfavorite) || target.matches(attributeCustomerFavorite)) {
+      console.log('[Foxy Portal] Favorite/Unfavorite button clicked');
       await handleFavorites(event);
+    }
   });
 
   let fetchCustomerData = async function (allowRedirect = true) {
+    console.log('[Foxy Portal] fetchCustomerData called', { allowRedirect });
     let sessionToken = getSessionToken();
     if (sessionToken) {
+      console.log('[Foxy Portal] Session token found, fetching customer data');
       const store =
         portal?.getAttribute("base")?.split("/s/")[0] ??
         JSON.parse(localStorage.getItem("session")).sso.split("/checkout")[0];
+      console.log('[Foxy Portal] Store URL:', store);
       const headers = {
         "Content-Type": "application/json",
         "FOXY-API-VERSION": "1",
@@ -147,6 +167,12 @@ var FC = FC || {};
           { headers }
         ),
       ]);
+
+      console.log('[Foxy Portal] API responses received', {
+        customerStatus: customerResponse.status,
+        transactionStatus: transactionResponse.status,
+        subscriptionStatus: subscriptionResponse.status
+      });
 
       const customerData = await customerResponse.json();
       const transactionData = await transactionResponse.json();
@@ -163,11 +189,13 @@ var FC = FC || {};
           email: customerData.email,
           last_login_date: customerData.last_login_date,
         };
+        console.log('[Foxy Portal] Customer details stored:', { id: customerDetails.id, email: customerDetails.email });
         localStorage.setItem("fx.customer.details", JSON.stringify(customerDetails));
 
         customerAttributes = {};
         if (customerData._embedded?.["fx:attributes"]) {
           let attributes = customerData._embedded["fx:attributes"];
+          console.log('[Foxy Portal] Processing customer attributes, count:', attributes.length);
           for (let i = 0; i < attributes.length; i++) {
             let attribute = attributes[i];
             let attribute_name = attribute.name.replace(" ", "_");
@@ -176,6 +204,7 @@ var FC = FC || {};
               value: attribute.value,
             };
           }
+          console.log('[Foxy Portal] Customer attributes:', Object.keys(customerAttributes));
         }
         localStorage.setItem("fx.customer.attributes", JSON.stringify(customerAttributes));
       }
@@ -183,6 +212,7 @@ var FC = FC || {};
       transactionCodes = [];
       if (transactionData._embedded?.["fx:transactions"]) {
         let transactions = transactionData._embedded["fx:transactions"];
+        console.log('[Foxy Portal] Processing transactions, count:', transactions.length);
         for (let t = 0; t < transactions.length; t++) {
           let items = transactions[t]?._embedded?.["fx:items"];
           if (!items || !items.length) continue;
@@ -193,6 +223,7 @@ var FC = FC || {};
           }
           if (useLatestTransactionOnly && i == 0) break;
         }
+        console.log('[Foxy Portal] Transaction codes:', transactionCodes);
       }
       localStorage.setItem("fx.customer.transactions", JSON.stringify({ codes: transactionCodes }));
 
@@ -200,6 +231,7 @@ var FC = FC || {};
       pastDueAmount = 0;
       if (subscriptionData._embedded?.["fx:subscriptions"]) {
         let subscriptions = subscriptionData._embedded["fx:subscriptions"];
+        console.log('[Foxy Portal] Processing subscriptions, count:', subscriptions.length);
         for (let s = 0; s < subscriptions.length; s++) {
           let subscription = subscriptions[s];
 
@@ -221,6 +253,7 @@ var FC = FC || {};
             }
           }
         }
+        console.log('[Foxy Portal] Active subscriptions:', { count: activeSubs, codes: activeSubCodes, pastDueAmount });
       }
       localStorage.setItem(
         "fx.customer.subs",
@@ -231,6 +264,7 @@ var FC = FC || {};
         })
       );
 
+      console.log('[Foxy Portal] Customer data fetch complete, dispatching fx.fetch.done event');
       const event = new Event("fx.fetch.done");
 
       // Dispatch the event.
@@ -240,26 +274,33 @@ var FC = FC || {};
       checkForDynamicRedirect();
       // Redirect if loginRedirect set instead of showing the portal
       if (!existingAuthentication && allowRedirect) {
+        console.log('[Foxy Portal] New authentication detected, handling redirect');
         handleOnLogInRedirect();
       }
+    } else {
+      console.log('[Foxy Portal] No session token found');
     }
     updatePage();
   };
   let handleOnLogInRedirect = function () {
+    console.log('[Foxy Portal] handleOnLogInRedirect called', { loginRedirect, authenticated, currentPath: window.location.pathname });
     if (
       loginRedirect != "" &&
       authenticated &&
       !window.location.pathname.match(new RegExp("^" + loginRedirect))
     ) {
+      console.log('[Foxy Portal] Redirecting to:', window.location.origin + loginRedirect);
       window.location.assign(window.location.origin + loginRedirect);
     }
   };
   let showSpinnerAnimation = function (forcePasswordReset) {
     checkForDynamicRedirect();
+    console.log('[Foxy Portal] showSpinnerAnimation called', { loginRedirect, forcePasswordReset, currentPath: window.location.pathname });
     if (
       loginRedirect != "" && !forcePasswordReset &&
       !window.location.pathname.match(new RegExp("^" + loginRedirect))
     ) {
+      console.log('[Foxy Portal] Showing spinner animation');
       portal.parentElement.style.display = "none";
       portal.parentElement.insertAdjacentHTML(
         "beforebegin",
@@ -277,12 +318,20 @@ var FC = FC || {};
     );
   }
   let updatePage = function () {
+    console.log('[Foxy Portal] updatePage called', {
+      authenticated,
+      activeSubs,
+      isOnProtectedPath: isOnProtectedPath(),
+      currentPath: window.location.pathname
+    });
+
     // Redirect if on any protected path and not authenticated, or on a protected path and no active subs
     if (
       protectedPaths.length &&
       isOnProtectedPath() &&
       (!authenticated || (!activeSubs && redirectIfNoActiveSubscriptions))
     ) {
+      console.log('[Foxy Portal] User not authorized for protected path, redirecting to:', window.location.origin + loginOrSignupPath);
       window.location.assign(window.location.origin + loginOrSignupPath);
     }
 
@@ -486,6 +535,7 @@ var FC = FC || {};
     // Where DYNAMIC is the Foxy attribute name with spaces -> _ and no special chars.
     // Matches are case-insensitive, and "includes" checks substring containment.
     (function handleAttributeValueConditions() {
+      console.log('[Foxy Portal] Processing attribute value conditions');
       // Optimized: no full DOM scan. Build exact selectors from existing customer attribute names.
       const PREFIX = "foxy-logic-customer-attribute-";
       const INC_SUFFIX = "-value-includes";
@@ -505,7 +555,12 @@ var FC = FC || {};
       });
 
       const names = Object.keys(attrs);
-      if (!names.length) return; // nothing to resolve
+      if (!names.length) {
+        console.log('[Foxy Portal] No customer attributes to process for value conditions');
+        return; // nothing to resolve
+      }
+
+      console.log('[Foxy Portal] Processing value conditions for attributes:', names);
 
       // Build exact attribute-name selectors for only the customer's attributes
       const incSelectors = names.map(n => `[${PREFIX}${n}${INC_SUFFIX}]`);
@@ -539,6 +594,14 @@ var FC = FC || {};
             shouldShow = desired ? actual !== desired : true;
           }
 
+          console.log('[Foxy Portal] Attribute value condition check:', {
+            attribute: a.name,
+            desired,
+            actual,
+            shouldShow,
+            isIncludes
+          });
+
           // Target this exact node's rule by including the value in the selector
           const selector = insertValueIntoAttribute(`[${a.name}]`, a.value);
           hideCustomAttribute(selector);
@@ -554,6 +617,9 @@ var FC = FC || {};
       }
     })();
     // ============================================
+
+    console.log('[Foxy Portal] Attributes to hide:', attributesToHide.length);
+    console.log('[Foxy Portal] Attributes to show:', attributesToShow.length);
 
     let portalCSS = `
             ${attributesToHide.join(", ")} {
@@ -580,6 +646,7 @@ var FC = FC || {};
 
     // Remove hidden elements from the page if configured to and not on the portal page
     if (!portal && removeElementsFromPage) {
+      console.log('[Foxy Portal] Removing hidden elements from page');
       for (let c = 0; c < attributesToHide.length; c++) {
         const elAttribute = attributesToHide[c];
         if (!attributesToShow.includes(elAttribute)) {
@@ -602,14 +669,21 @@ var FC = FC || {};
         }
       }
     }
+    console.log('[Foxy Portal] Page update complete');
   };
 
   let handleFavorites = async function (event) {
-    if (!webhookEndpointURL) return;
+    console.log('[Foxy Portal] handleFavorites called', { webhookEndpointURL });
+    if (!webhookEndpointURL) {
+      console.log('[Foxy Portal] No webhook endpoint configured, favorites disabled');
+      return;
+    }
     const favoriteElement = event.target;
     let customerID = getCustomerID();
+    console.log('[Foxy Portal] Customer ID:', customerID);
 
     let displayOppositeFavoriteState = oppositeElement => {
+      console.log('[Foxy Portal] Toggling favorite display state');
       //  removing pointer-events to element while action takes place for debouncing
       favoriteElement.style.setProperty("display", "none", "important");
       oppositeElement.style.setProperty("display", "revert", "important");
@@ -632,6 +706,11 @@ var FC = FC || {};
         ?.closest(attributeItemFavoriteCode)
         .getAttribute(attributeItemFavoriteCode.replace(/\[|\]/g, ""));
 
+      console.log('[Foxy Portal] Processing favorite action', {
+        action: ifTrueAddElseRemove ? 'add' : 'remove',
+        itemID
+      });
+
       const attributeID = customerAttributes[`favorite-${itemID}`]?.id;
       try {
         const headers = {
@@ -643,7 +722,10 @@ var FC = FC || {};
           item_code: itemID,
           attribute_id: ifTrueAddElseRemove ? false : attributeID,
         });
+        console.log('[Foxy Portal] Sending favorite request to webhook:', { url: webhookEndpointURL, body });
         const res = await fetch(webhookEndpointURL, { headers, method: "POST", body });
+
+        console.log('[Foxy Portal] Webhook response status:', res.status);
 
         if (!res.ok) {
           const error = ifTrueAddElseRemove
@@ -654,23 +736,27 @@ var FC = FC || {};
         }
 
         const data = await res.json();
+        console.log('[Foxy Portal] Webhook response data:', data);
 
         if (!ifTrueAddElseRemove && !data.message.includes("successfully")) {
           throw new Error(`There was an error removing favorite from product with ID ${itemID} `);
         }
+        console.log('[Foxy Portal] Favorite action completed successfully');
       } catch (error) {
-        console.log(error);
-        console.log(error?.type);
+        console.log('[Foxy Portal] Error in favorite action:', error);
+        console.log('[Foxy Portal] Error type:', error?.type);
       }
     };
 
     if (favoriteElement.matches(attributeCustomerFavorite) && customerID) {
+      console.log('[Foxy Portal] Adding favorite');
       const unfavoriteElement = document.querySelector(attributeCustomerUnfavorite);
       displayOppositeFavoriteState(unfavoriteElement);
       await addOrRemoveFavorite(true);
       await fetchCustomerData(false);
       return;
     } else if (favoriteElement.matches(attributeCustomerUnfavorite) && customerID) {
+      console.log('[Foxy Portal] Removing favorite');
       const favoriteElement = document.querySelector(attributeCustomerFavorite);
       displayOppositeFavoriteState(favoriteElement);
       await addOrRemoveFavorite(false);
@@ -679,6 +765,7 @@ var FC = FC || {};
     }
   };
   let init = function () {
+    console.log('[Foxy Portal] Initializing script');
     try {
       checkAuthentication();
       let subData = JSON.parse(localStorage.getItem("fx.customer.subs"));
@@ -686,6 +773,7 @@ var FC = FC || {};
         activeSubs = parseInt(subData.count);
         activeSubCodes = subData.codes;
         pastDueAmount = subData.past_due_amount;
+        console.log('[Foxy Portal] Loaded subscription data from localStorage:', { activeSubs, activeSubCodes, pastDueAmount });
       }
       let transactionData = JSON.parse(localStorage.getItem("fx.customer.transactions"));
       // Backwards compatability, remove later
@@ -697,14 +785,17 @@ var FC = FC || {};
       if (!transactionCodes) {
         transactionCodes = [];
       }
+      console.log('[Foxy Portal] Loaded transaction codes from localStorage:', transactionCodes);
       customerAttributes = JSON.parse(localStorage.getItem("fx.customer.attributes"));
       if (!customerAttributes) {
         customerAttributes = {};
       }
+      console.log('[Foxy Portal] Loaded customer attributes from localStorage:', Object.keys(customerAttributes));
       customerDetails = JSON.parse(localStorage.getItem("fx.customer.details"));
       if (!customerDetails) {
         customerDetails = {};
       }
+      console.log('[Foxy Portal] Loaded customer details from localStorage:', customerDetails);
 
       const event = new Event("fx.fetch.done");
 
@@ -712,13 +803,18 @@ var FC = FC || {};
       window.dispatchEvent(event);
 
       if (authenticated) {
+        console.log('[Foxy Portal] User authenticated on init, fetching fresh customer data');
         fetchCustomerData(false);
       }
     } catch (error) {
       console.log("Portal content protection initialization error:", error);
     }
-    if (!authenticated) clearLocalStorage();
+    if (!authenticated) {
+      console.log('[Foxy Portal] User not authenticated on init, clearing localStorage');
+      clearLocalStorage();
+    }
     updatePage();
+    console.log('[Foxy Portal] Initialization complete');
   };
   let parseJWT = function (token) {
     let base64Url = token.split(".")[1];
@@ -742,20 +838,32 @@ var FC = FC || {};
         Math.floor(new Date(sessionStore.date_created).getTime() / 1000) + sessionStore.expires_in;
       authenticated =
         expires > Math.floor(Date.now() / 1000) && sessionData.hasOwnProperty("customer_id");
+      console.log('[Foxy Portal] Authentication check:', {
+        authenticated,
+        expires: new Date(expires * 1000),
+        customerId: sessionData?.customer_id
+      });
+    } else {
+      console.log('[Foxy Portal] No session found in localStorage');
     }
   };
   let getSessionToken = function () {
     let sessionStore = JSON.parse(localStorage.getItem(portalSessionKey));
     if (sessionStore && sessionStore.hasOwnProperty("session_token")) {
+      console.log('[Foxy Portal] Session token retrieved');
       return sessionStore.session_token;
     }
+    console.log('[Foxy Portal] No session token found');
     return false;
   };
   let getCustomerID = function () {
     let sessionStore = JSON.parse(localStorage.getItem(portalSessionKey));
     if (sessionStore && sessionStore.hasOwnProperty("sso")) {
-      return new URL(sessionStore.sso).searchParams.get("fc_customer_id");
+      const customerID = new URL(sessionStore.sso).searchParams.get("fc_customer_id");
+      console.log('[Foxy Portal] Customer ID retrieved:', customerID);
+      return customerID;
     }
+    console.log('[Foxy Portal] No customer ID found');
     return false;
   };
   let checkForDynamicRedirect = function () {
@@ -772,8 +880,10 @@ var FC = FC || {};
     if (redirectParam) {
       loginRedirect = `${decodeURIComponent(redirectParam)}${hash}`;
       hasDynamicRedirect = true; // Mark that we have a dynamic redirect
+      console.log('[Foxy Portal] Dynamic redirect detected:', loginRedirect);
     } else {
       hasDynamicRedirect = false; // No dynamic redirect found
+      console.log('[Foxy Portal] No dynamic redirect in URL');
     }
   };
 
@@ -808,5 +918,6 @@ var FC = FC || {};
     checkAuthentication();
     return authenticated && activeSubs > 0;
   };
+  console.log('[Foxy Portal] FC.custom API methods attached');
   init();
 })(FC);
